@@ -13,6 +13,8 @@ Key Features:
 - Saves download progress to avoid reprocessing
 """
 
+import json
+
 import requests
 import random
 import time
@@ -33,10 +35,12 @@ import undetected_chromedriver as uc
 # CONFIGURATION
 # ============================================================
 
+with open('credentials.json', 'r') as f:
+    creds = json.load(f)
 
 # TraceParts login credentials
-EMAIL = "stplvivek@gmail.com"
-PASSWORD = "Welcome@321"
+EMAIL = creds.get("email")
+PASSWORD = creds.get("password")
 
 # Example product URL (not used in batch mode)
 PRODUCT_URL = "https://www.traceparts.com/en/product/ganternormteile-gn-1113-key-rings-stainless-steel?CatalogPath=TRACEPARTS%3ATP01001&Product=90-17042025-049598"
@@ -173,49 +177,32 @@ def human_scroll(driver):
 
 # ============================================================
 # DRIVER INITIALIZATION
-# ============================================================
+# ====import undetected_chromedriver as uc
 
 def start_driver():
-    """
-    Starts an undetected Chrome WebDriver instance.
-
-    Uses anti-detection techniques to bypass automation checks.
-
-    Returns
-    -------
-    WebDriver
-        Running Chrome driver instance.
-    """
-
     while True:
         driver = None
         try:
-            options = Options()
-            options.add_argument("--profile-directory=Default")
-            options.add_argument("--disable-blink-features=AutomationControlled")
+            options = uc.ChromeOptions()
+
             options.add_argument("--lang=en-US")
 
-            options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            options.add_experimental_option("useAutomationExtension", False)
+            # ✅ Disable password manager & save popup
+            prefs = {
+                "credentials_enable_service": False,
+                "profile.password_manager_enabled": False,
+                "profile.password_manager_leak_detection": False
+            }
+            options.add_experimental_option("prefs", prefs)
 
-            driver = uc.Chrome()
+            driver = uc.Chrome(options=options)
 
-            # Remove Selenium webdriver flag
-            driver.execute_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                })
-            """)
-
-            time.sleep(2)
             driver.maximize_window()
-
             print("Driver started successfully")
             return driver
 
         except Exception as e:
             print("Driver start failed:", e)
-
             if driver:
                 try:
                     driver.quit()
@@ -224,7 +211,6 @@ def start_driver():
 
             print("Retrying in 5 seconds...")
             time.sleep(5)
-
 
 # ============================================================
 # LOGIN PROCESS
@@ -286,6 +272,7 @@ def login(driver):
     email.click()
     email.send_keys(Keys.ENTER)
 
+    print("Login completed, waiting for page to load...")
 
 # ============================================================
 # CLOUDFLARE HANDLING
@@ -337,65 +324,46 @@ def check_cloudflare(driver):
         return False
 
 
+def safe_execute(func, *args, retries=3, delay=2):
+    for attempt in range(retries):
+        try:
+            print(f"[TRY {attempt+1}] {func.__name__}")
+            return func(*args)
+        except Exception as e:
+            print(f"[ERROR] {func.__name__}: {e}")
+            time.sleep(delay)
+    return None
+
+
 # ============================================================
 # DOWNLOAD LOGIC
 # ============================================================
 
-# def download_cad(driver,filename, part_url):
-#     try:
-#         driver.get(part_url)
-#         driver.implicitly_wait(5)
+def download_cad(driver, filename, part_url):
+    try:
+        print(f"\n[START] Processing: {filename}")
 
-#         human_delay(2,4)
-#         # human_scroll(driver)
-#         check_cloudflare(driver)
+        if not prepare_download(driver, part_url):
+            print("[FAIL] prepare_download failed")
+            return False
 
-#         dropdown = WebDriverWait(driver,10).until(
-#             EC.element_to_be_clickable((By.ID,"dropdown-cad-format")))
-        
-#         human_click(driver, dropdown)
-#         human_delay()
-#         try:
-#             option = WebDriverWait(driver,10).until(
-#                 EC.presence_of_element_located((By.XPATH,"//div[normalize-space()='STEP AP242']")))
-            
-#             driver.execute_script("arguments[0].scrollIntoView(true);", option)
-#             human_delay()
-#             human_click(driver, option)
-#             print("STEP AP242 selected")
-#             driver.implicitly_wait(3)
-#             time.sleep(2)
-#             driver.find_element(By.XPATH, "//button[@id='direct-cad-download']/i").click()  # Click outside to close dropdown
-#         except Exception as e:
-#             print("Desired format option not found:", e)
+        file_href = get_download_link(driver)
 
-#         try:
-#             notification_pane = WebDriverWait(driver, 10).until(
-#                 EC.element_to_be_clickable((By.XPATH, '//div[@class="notif-container"]/i[@id="dashboard-button"]')))
-#             human_click(driver, notification_pane)
-#             time.sleep(3)
-#         except Exception as e:
-#             print("Notification pane button not found:")
+        if not file_href:
+            print("[FAIL] No download link")
+            return False
 
-        
-#         file_href = get_download_link(driver)
-#         print(file_href)
-#         download_file(file_href, filename)
+        success = download_file(file_href, filename)
 
-#     except Exception as e:
-#         print("Error during download initiation:", e)
-#         return
+        if success:
+            print(f"[SUCCESS] {filename}")
+            return True
 
-def download_cad(driver,filename, part_url):
-    if not prepare_download(driver, part_url):
-        print("Preparation for download failed.")
-        return
+        return False
 
-    file_href = get_download_link(driver)
-    if file_href:
-        download_file(file_href, filename)
-    else:
-        print("Download link not found, skipping file.")
+    except Exception as e:
+        print(f"[ERROR] download_cad: {e}")
+        return False
 
 def open_product_page(driver, part_url):
     """
@@ -403,9 +371,10 @@ def open_product_page(driver, part_url):
     """
     driver.get(part_url)
     driver.implicitly_wait(5)
-
+    print(f"Opened product page: {part_url}")
     human_delay(2, 4)
-    check_cloudflare(driver)
+    res = check_cloudflare(driver)
+    return res
 
 def open_cad_dropdown(driver):
     """
@@ -414,18 +383,17 @@ def open_cad_dropdown(driver):
     dropdown = WebDriverWait(driver, 10).until(
         EC.element_to_be_clickable((By.ID, "dropdown-cad-format"))
     )
-
+    print("CAD format dropdown found, clicking to open.")
     human_click(driver, dropdown)
     human_delay()
 
     return dropdown
 
 def select_step_format(driver):
-    """
-    Selects STEP AP242 format from dropdown.
-    """
-    while True:
+    for attempt in range(3):
         try:
+            print(f"[STEP SELECT] Attempt {attempt+1}")
+
             option = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located(
                     (By.XPATH, "//div[normalize-space()='STEP AP242']")
@@ -433,29 +401,30 @@ def select_step_format(driver):
             )
 
             driver.execute_script("arguments[0].scrollIntoView(true);", option)
-            human_delay()
-
             human_click(driver, option)
 
-            print("STEP AP242 selected")
-
             WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.XPATH, "//button[@id='direct-cad-download']/i"))
+                EC.element_to_be_clickable((By.ID, "direct-cad-download"))
             ).click()
 
+            print("[OK] STEP selected")
             return True
 
         except Exception as e:
-            print("Desired format option not found retrying")
+            print("[RETRY] STEP selection failed:", e)
             driver.refresh()
-            driver.implicitly_wait(5)
-            open_cad_dropdown(driver)
+            time.sleep(2)
+
+    print("[FAIL] STEP selection failed after retries")
+    return False
     
 def open_notification_pane(driver):
-        while True:
+        i = 0
+        while i<3:
             """
             Opens the notification/download panel.
             """
+            print(f"Attempting to open notification pane, attempt {i}")
             try:
                 notification_pane = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((
@@ -470,7 +439,9 @@ def open_notification_pane(driver):
                 return True
 
             except Exception as e:
+                i += 1
                 print("Notification pane button not found, retrying")
+                
 
 def prepare_download(driver, part_url):
     """
@@ -485,14 +456,14 @@ def prepare_download(driver, part_url):
 
         open_cad_dropdown(driver)
 
-        select_step_format(driver)
-
-        open_notification_pane(driver)
+        res = select_step_format(driver)
+        print(res)
+        if res:
+            open_notification_pane(driver)
 
         return True
-
     except Exception as e:
-        print("Error in prepare_download:", e)
+        print("Error in prepare_download:")
         return False
     
     
@@ -506,27 +477,30 @@ def get_download_link(driver):
     except Exception as e:
         print("Download link not found:", e)
         return None
-   
-        
+
+
 def download_file(btn_link, filename):
     try:
-        time.sleep(2)
-        # btn_link = driver.find_element(By.XPATH, '(//div[@class="download-item-container"]/a[contains(@href,"downloads")])[1]').get_attribute("href")
-        # print(f"Download link: {btn_link}")
-        print("Starting file download for file_name: ", filename)
-        response = requests.get(btn_link)
-        file_name = os.path.join("trace_parts", filename)
+        print(f"[DOWNLOAD] {filename}")
+
+        response = requests.get(btn_link, timeout=(10, 60))
+
         if response.status_code == 200:
-            with open(file_name, "wb") as f:
+            file_path = os.path.join("trace_parts", filename)
+
+            with open(file_path, "wb") as f:
                 f.write(response.content)
-            print("Download completed successfully.")
+
+            print("[OK] File saved")
+            return True
+
         else:
-            print("Download failed.", response.status_code)
+            print(f"[FAIL] Status: {response.status_code}")
+            return False
 
     except Exception as e:
-        print("Download confirmation failed:",  response.status_code)
-    time.sleep(5)
-
+        print(f"[ERROR] download_file: {e}")
+        return False
 
 
 # ============================================================
@@ -566,44 +540,48 @@ def get_url_list():
             time.sleep(10)
 
 
-
 def run_session():
-    """
-    One full session:
-    - start browser
-    - login
-    - download 7 files
-    - close browser
-    """
-
     global offset
 
-    driver = start_driver()
-    login(driver)
-    check_cloudflare(driver)
+    driver = None
 
-    print("Session started")
+    try:
+        driver = start_driver()
+        login(driver)
+        check_cloudflare(driver)
 
-    # Fetch only 7 records (important)
-    url_list = get_url_list()[:7]
+        print("[SESSION STARTED]")
 
-    for filename, part_url in url_list:
-        try:
-            download_cad(driver, filename, part_url)
+        url_list = get_url_list()
 
-            # update progress
-            offset += 1
-            save_offset(offset)
+        if not url_list:
+            print("[INFO] No URLs found")
+            return
 
-            # small delay between downloads
-            time.sleep(random.uniform(2, 5))
+        for filename, part_url in url_list:
 
-        except Exception as e:
-            print("Download failed:", e)
+            success = safe_execute(download_cad, driver, filename, part_url)
 
-    driver.quit()
-    print("Session completed, driver closed.")
+            if success:
+                offset += 1
+                save_offset(offset)
+                print(f"[PROGRESS] Offset updated → {offset}")
 
+            else:
+                print(f"[SKIP] {filename}")
+
+            time.sleep(random.uniform(2, 4))
+
+    except Exception as e:
+        print("[FATAL ERROR] run_session:", e)
+
+    finally:
+        if driver:
+            try:
+                driver.quit()
+                print("[DRIVER CLOSED]")
+            except:
+                pass
 
 
 # ============================================================
@@ -613,15 +591,16 @@ def run_session():
 def main():
     while True:
         try:
+            print("\n========== NEW SESSION ==========")
             run_session()
 
-            # wait 5–15 minutes before next session
-            sleep_time = random.randint(300, 900)
-            print(f"Waiting {sleep_time//60} minutes before next session...")
+            sleep_time = random.randint(300, 600)
+            print(f"[WAIT] {sleep_time}s before next run")
+
             time.sleep(sleep_time)
 
         except Exception as e:
-            print("Error in main loop:", e)
+            print("[MAIN ERROR]:", e)
             time.sleep(30)
 
 
