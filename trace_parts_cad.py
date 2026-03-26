@@ -107,11 +107,11 @@ def db_connector():
     while True:
         try:
             connection = mysql.connector.connect(
-                host="13.201.205.150",
-                port=3306,
-                user="gd_data",
-                password="GD@2025@softage",
-                database="tracepart",
+                host="ip",
+                port=port,
+                user="user",
+                password="password",
+                database="dbname",
                 connection_timeout=10
             )
 
